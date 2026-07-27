@@ -4,52 +4,47 @@ import { captureScreenshots } from "./screenshot.js";
 import { AppError } from "./types.js";
 import { assertPublicUrl } from "./url-security.js";
 
-const TOTAL_TIMEOUT_MS = 60_000;
+const TOTAL_TIMEOUT_MS = 180_000;
 
 export type AuditService = (
   input: { url: string; leadId?: string },
   config: AppConfig,
 ) => Promise<Record<string, unknown>>;
 
-function deadline(startedAt: number): () => number {
-  return () => {
-    const remaining = TOTAL_TIMEOUT_MS - (Date.now() - startedAt);
-    if (remaining <= 0) {
-      throw new AppError(504, "IDO_TULLEPES", "A kérés túllépte a 60 másodperces időkorlátot.");
-    }
-    return remaining;
-  };
-}
-
 export const runVisualAudit: AuditService = async (input, config) => {
   const startedAt = Date.now();
-  const remainingMs = deadline(startedAt);
+  const log = (message: string) => {
+    console.info(JSON.stringify({ message, elapsedMs: Date.now() - startedAt }));
+  };
+  log("audit indult");
   const controller = new AbortController();
   let timeout: NodeJS.Timeout | undefined;
   const timeoutError = new AppError(
     504,
     "IDO_TULLEPES",
-    "A kérés túllépte a 60 másodperces időkorlátot.",
+    "A kérés túllépte a 180 másodperces időkorlátot.",
   );
 
   const work = async () => {
     const validatedUrl = await assertPublicUrl(input.url);
+    log("URL ellenőrzése kész");
     const captures = await captureScreenshots(
       validatedUrl.toString(),
-      remainingMs,
       controller.signal,
+      log,
     );
     const visualAudit = await analyzeScreenshots(
       captures,
       config.openAiApiKey,
       config.openAiModel,
-      remainingMs(),
       controller.signal,
+      log,
     );
 
     const finalUrl =
       captures.desktop.finalUrl ?? captures.mobile.finalUrl ?? validatedUrl.toString();
-    return {
+    const screenshotIssues = [captures.desktop.issue, captures.mobile.issue].filter(Boolean);
+    const result = {
       status: "success",
       ...(input.leadId ? { leadId: input.leadId } : {}),
       url: validatedUrl.toString(),
@@ -59,9 +54,12 @@ export const runVisualAudit: AuditService = async (input, config) => {
         desktopAuditAvailable: Boolean(captures.desktop.image),
         mobileAuditAvailable: Boolean(captures.mobile.image),
       },
+      ...(screenshotIssues.length > 0 ? { screenshotIssues } : {}),
       modelUsed: config.openAiModel,
       auditedAt: new Date().toISOString(),
     };
+    log("audit kész");
+    return result;
   };
 
   try {

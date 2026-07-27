@@ -2,17 +2,35 @@ import { chromium, type Browser, type Page, type Route } from "playwright";
 import { assertPublicUrl } from "./url-security.js";
 import { AppError } from "./types.js";
 
-const MAX_PAGE_HEIGHT = 12_000;
+const VIEW_TIMEOUT_MS = 40_000;
+const DESKTOP_MAX_HEIGHT = 5_000;
+const MOBILE_MAX_HEIGHT = 6_000;
+
+export type AuditLogger = (message: string) => void;
+export type CaptureView = "desktop" | "mobile";
+export type CaptureIssue = {
+  view: CaptureView;
+  code: "KEPERNYOKEP_IDO_TULLEPES" | "KEPERNYOKEP_HIBA";
+  message: string;
+};
 
 export type ViewCapture = {
   image?: Buffer;
   finalUrl?: string;
+  issue?: CaptureIssue;
 };
 
 export type CaptureResult = {
   desktop: ViewCapture;
   mobile: ViewCapture;
 };
+
+class ViewTimeoutError extends Error {
+  constructor(public readonly view: CaptureView) {
+    super(`${view} screenshot timeout`);
+    this.name = "ViewTimeoutError";
+  }
+}
 
 async function secureRoute(route: Route): Promise<void> {
   const url = route.request().url();
@@ -55,7 +73,7 @@ async function handleCookieBanner(page: Page): Promise<void> {
   }
 }
 
-async function scrollForLazyContent(page: Page): Promise<void> {
+async function scrollForLazyContent(page: Page, maxHeight: number): Promise<void> {
   await page.evaluate(async (maxHeight) => {
     const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     let y = 0;
@@ -66,16 +84,18 @@ async function scrollForLazyContent(page: Page): Promise<void> {
     }
     window.scrollTo(0, 0);
     await delay(200);
-  }, MAX_PAGE_HEIGHT);
+  }, maxHeight);
 }
 
 async function captureView(
   browser: Browser,
   url: string,
-  mobile: boolean,
-  timeoutMs: number,
+  view: CaptureView,
+  signal: AbortSignal,
 ): Promise<ViewCapture> {
+  const mobile = view === "mobile";
   const viewport = mobile ? { width: 390, height: 844 } : { width: 1440, height: 900 };
+  const maxHeight = mobile ? MOBILE_MAX_HEIGHT : DESKTOP_MAX_HEIGHT;
   const context = await browser.newContext({
     viewport,
     deviceScaleFactor: 1,
@@ -83,48 +103,87 @@ async function captureView(
     hasTouch: mobile,
     serviceWorkers: "block",
   });
+  const closeOnAbort = () => {
+    void context.close();
+  };
   try {
+    signal.addEventListener("abort", closeOnAbort, { once: true });
+    if (signal.aborted) throw new ViewTimeoutError(view);
     await context.route("**/*", secureRoute);
     const page = await context.newPage();
-    page.setDefaultTimeout(Math.min(timeoutMs, 10_000));
-    page.setDefaultNavigationTimeout(Math.min(timeoutMs, 20_000));
+    page.setDefaultTimeout(10_000);
+    page.setDefaultNavigationTimeout(25_000);
 
     const response = await page.goto(url, {
       waitUntil: "domcontentloaded",
-      timeout: Math.min(timeoutMs, 20_000),
+      timeout: 25_000,
     });
     if (!response) {
       throw new Error("Nincs navigációs válasz.");
     }
 
-    await page.waitForLoadState("networkidle", { timeout: Math.min(timeoutMs, 5_000) }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 5_000 }).catch(() => {});
     await handleCookieBanner(page);
-    await scrollForLazyContent(page);
+    await scrollForLazyContent(page, maxHeight);
 
     const fullHeight = await page.evaluate(() => document.documentElement.scrollHeight);
-    const image =
-      fullHeight <= MAX_PAGE_HEIGHT
-        ? await page.screenshot({ type: "jpeg", quality: 80, fullPage: true })
-        : await page.screenshot({
-            type: "jpeg",
-            quality: 80,
-            clip: {
-              x: 0,
-              y: 0,
-              width: viewport.width,
-              height: MAX_PAGE_HEIGHT,
-            },
-          });
+    const image = await page.screenshot({
+      type: "jpeg",
+      quality: 70,
+      clip: {
+        x: 0,
+        y: 0,
+        width: viewport.width,
+        height: Math.max(1, Math.min(fullHeight, maxHeight)),
+      },
+    });
     return { image, finalUrl: page.url() };
   } finally {
+    signal.removeEventListener("abort", closeOnAbort);
     await context.close();
   }
 }
 
+async function captureViewWithTimeout(
+  browser: Browser,
+  url: string,
+  view: CaptureView,
+  parentSignal: AbortSignal,
+): Promise<ViewCapture> {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([parentSignal, controller.signal]);
+  let timeout: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      controller.abort();
+      reject(new ViewTimeoutError(view));
+    }, VIEW_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([captureView(browser, url, view, signal), timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    controller.abort();
+  }
+}
+
+function captureIssue(view: CaptureView, error: unknown): CaptureIssue {
+  const timedOut = error instanceof ViewTimeoutError;
+  const viewName = view === "desktop" ? "asztali" : "mobil";
+  return {
+    view,
+    code: timedOut ? "KEPERNYOKEP_IDO_TULLEPES" : "KEPERNYOKEP_HIBA",
+    message: timedOut
+      ? `A(z) ${viewName} nézet képernyőképének készítése túllépte a 40 másodperces időkorlátot.`
+      : `A(z) ${viewName} nézet képernyőképét nem sikerült elkészíteni.`,
+  };
+}
+
 export async function captureScreenshots(
   url: string,
-  remainingMs: () => number,
   signal: AbortSignal,
+  log: AuditLogger,
 ): Promise<CaptureResult> {
   let browser: Browser | undefined;
   const closeOnAbort = () => {
@@ -134,25 +193,51 @@ export async function captureScreenshots(
     browser = await chromium.launch({ headless: true });
     signal.addEventListener("abort", closeOnAbort, { once: true });
     if (signal.aborted) {
-      throw new AppError(504, "IDO_TULLEPES", "A kérés túllépte a 60 másodperces időkorlátot.");
+      throw new AppError(504, "IDO_TULLEPES", "A kérés túllépte a 180 másodperces időkorlátot.");
     }
     let desktop: ViewCapture = {};
     let mobile: ViewCapture = {};
 
+    log("asztali oldal betöltése indult");
     try {
-      desktop = await captureView(browser, url, false, remainingMs());
-    } catch {
-      desktop = {};
-    }
-    if (remainingMs() > 2_000) {
-      try {
-        mobile = await captureView(browser, url, true, remainingMs());
-      } catch {
-        mobile = {};
+      desktop = await captureViewWithTimeout(browser, url, "desktop", signal);
+      log("asztali screenshot kész");
+    } catch (error) {
+      if (signal.aborted) {
+        throw new AppError(504, "IDO_TULLEPES", "A kérés túllépte a 180 másodperces időkorlátot.");
       }
+      desktop = { issue: captureIssue("desktop", error) };
+      log("asztali screenshot sikertelen");
+    }
+
+    log("mobil oldal betöltése indult");
+    try {
+      mobile = await captureViewWithTimeout(browser, url, "mobile", signal);
+      log("mobil screenshot kész");
+    } catch (error) {
+      if (signal.aborted) {
+        throw new AppError(504, "IDO_TULLEPES", "A kérés túllépte a 180 másodperces időkorlátot.");
+      }
+      mobile = { issue: captureIssue("mobile", error) };
+      log("mobil screenshot sikertelen");
     }
 
     if (!desktop.image && !mobile.image) {
+      const desktopTimedOut = desktop.issue?.code === "KEPERNYOKEP_IDO_TULLEPES";
+      const mobileTimedOut = mobile.issue?.code === "KEPERNYOKEP_IDO_TULLEPES";
+      if (desktopTimedOut || mobileTimedOut) {
+        const code =
+          desktopTimedOut && !mobileTimedOut
+            ? "ASZTALI_KEPERNYOKEP_IDO_TULLEPES"
+            : mobileTimedOut && !desktopTimedOut
+              ? "MOBIL_KEPERNYOKEP_IDO_TULLEPES"
+              : "KEPERNYOKEP_IDO_TULLEPES";
+        throw new AppError(
+          504,
+          code,
+          [desktop.issue?.message, mobile.issue?.message].filter(Boolean).join(" "),
+        );
+      }
       throw new AppError(
         422,
         "KEPERNYOKEP_HIBA",

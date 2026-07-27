@@ -7,10 +7,10 @@ API strukturált képi elemzésével magyar nyelvű vizuális és használhatós
 ## Fő tulajdonságok
 
 - TypeScript, Express, Playwright Chromium, OpenAI hivatalos Node.js SDK és Zod
-- 1440 × 900-as asztali és 390 × 844-es mobilnézet
-- lazy-load tartalmakhoz fokozatos görgetés, cookie banner best-effort kezelése
-- legfeljebb 5000 pixel magas asztali és 6000 pixel magas mobil JPEG-képernyőkép
-- 70-es JPEG-minőség, OpenAI előtt méretkorlátozott képek és `low` képrészletesség
+- 1440 × 1600-as asztali és 390 × 1800-as mobilnézet
+- a felső, legfontosabb oldalrész rögzítése és cookie banner best-effort kezelése
+- 1440 × 1600-as asztali és 390 × 1800-as mobil JPEG-képernyőkép
+- 65-ös JPEG-minőség, OpenAI előtt méretkorlátozott képek és `low` képrészletesség
 - 180 másodperces teljes kérésidő-korlát és 10 kérés / 15 perc / IP rate limit
 - Bearer tokenes védelem
 - SSRF-védelem URL-, IP-, DNS- és átirányítás-ellenőrzéssel
@@ -61,17 +61,24 @@ OpenAI-hívásnál a környezetből beolvasott egyetlen értéket használja.
 
 | Szakasz | Maximum |
 |---|---:|
-| Asztali oldalbetöltés és screenshot | 40 másodperc |
-| Mobil oldalbetöltés és screenshot | 40 másodperc |
+| Asztali navigáció | legfeljebb 25 másodperc |
+| Asztali screenshot | legfeljebb 10 másodperc |
+| Mobil navigáció | legfeljebb 25 másodperc |
+| Mobil screenshot | legfeljebb 10 másodperc |
 | OpenAI vizuális elemzés | 90 másodperc |
 | Teljes auditfolyamat | 180 másodperc |
 
 Az asztali és mobil nézet egymás után készül. Ha csak az egyik nézet sikertelen,
 az audit a másik képpel folytatódik, és a sikeres válasz opcionális
 `screenshotIssues` mezője jelzi az érintett nézetet és a hiba okát. A képek már a
-Playwrightban 70-es minőségű JPEG-ként készülnek, majd az OpenAI-kérés előtt a
+Playwrightban 65-ös minőségű JPEG-ként készülnek, majd az OpenAI-kérés előtt a
 Sharp legfeljebb 1440 pixel széles asztali, illetve 780 pixel széles mobil JPEG-re
 méretezi és optimalizálja őket.
+
+A navigáció kizárólag a `domcontentloaded` állapotig vár, majd legfeljebb további
+3 másodpercet hagy a dinamikus tartalomnak. Nem használ `networkidle` várakozást.
+A Playwright page, context és browser erőforrásai külön, hibabiztos lezáró
+segédfüggvényeken keresztül, egyetlen kijelölt `finally` blokkban záródnak.
 
 Az Express szerver időkorlátjai: 190 másodperces request timeout, 195 másodperces
 headers timeout és 185 másodperces keep-alive timeout.
@@ -355,8 +362,8 @@ Lehetséges kódok:
 | 429 | `RATE_LIMIT` | Túl sok kérés érkezett az adott IP-ről. |
 | 502 | `ELEMZES_HIBA` | Az OpenAI-elemzés nem adott használható eredményt. |
 | 504 | `OPENAI_IDO_TULLEPES` | Az OpenAI képelemzése túllépte a 90 másodpercet. |
-| 504 | `ASZTALI_KEPERNYOKEP_IDO_TULLEPES` | Az asztali képernyőkép túllépte a 40 másodpercet, és nem készült használható másik nézet. |
-| 504 | `MOBIL_KEPERNYOKEP_IDO_TULLEPES` | A mobilképernyőkép túllépte a 40 másodpercet, és nem készült használható másik nézet. |
+| 504 | `ASZTALI_KEPERNYOKEP_IDO_TULLEPES` | Az asztali navigáció vagy screenshot időtúllépéssel leállt, és nem készült használható másik nézet. |
+| 504 | `MOBIL_KEPERNYOKEP_IDO_TULLEPES` | A mobil navigáció vagy screenshot időtúllépéssel leállt, és nem készült használható másik nézet. |
 | 504 | `KEPERNYOKEP_IDO_TULLEPES` | Mindkét képernyőkép-kísérlet időtúllépéssel állt le. |
 | 504 | `IDO_TULLEPES` | A teljes feldolgozás túllépte a 180 másodpercet. |
 | 500 | `BELSO_HIBA` | Nem várt szerverhiba. |

@@ -13,8 +13,14 @@ export type AuditService = (
 
 export const runVisualAudit: AuditService = async (input, config) => {
   const startedAt = Date.now();
-  const log = (message: string) => {
-    console.info(JSON.stringify({ message, elapsedMs: Date.now() - startedAt }));
+  const log = (message: string, details?: Record<string, unknown>) => {
+    console.info(
+      JSON.stringify({
+        message,
+        elapsedMs: Date.now() - startedAt,
+        ...(details ?? {}),
+      }),
+    );
   };
   log("audit indult");
   const controller = new AbortController();
@@ -58,7 +64,7 @@ export const runVisualAudit: AuditService = async (input, config) => {
       modelUsed: config.openAiModel,
       auditedAt: new Date().toISOString(),
     };
-    log("audit kész");
+    log("audit elkészült");
     return result;
   };
 

@@ -50,7 +50,7 @@ export function createApp(config: AppConfig, auditService: AuditService = runVis
     async (req, res, next) => {
       try {
         const input = requestSchema.parse(req.body);
-        const result = await auditService(input, config);
+        const result = await auditService(input);
         res.json(result);
       } catch (error) {
         next(error);

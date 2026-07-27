@@ -5,9 +5,6 @@ import type { AppConfig } from "../src/config.js";
 
 const config: AppConfig = {
   apiSecret: "egy-nagyon-hosszu-teszt-titok",
-  openAiApiKey: "teszt-kulcs",
-  openAiModel: "teszt-modell",
-  port: 3000,
   allowedOrigins: new Set(),
 };
 

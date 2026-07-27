@@ -1,5 +1,3 @@
-import type { AppConfig } from "./config.js";
-import { analyzeScreenshots } from "./openai-audit.js";
 import { captureScreenshots } from "./screenshot.js";
 import { AppError } from "./types.js";
 import { assertPublicUrl } from "./url-security.js";
@@ -8,10 +6,13 @@ const TOTAL_TIMEOUT_MS = 180_000;
 
 export type AuditService = (
   input: { url: string; leadId?: string },
-  config: AppConfig,
 ) => Promise<Record<string, unknown>>;
 
-export const runVisualAudit: AuditService = async (input, config) => {
+function screenshotDataUrl(image: Buffer): string {
+  return `data:image/jpeg;base64,${image.toString("base64")}`;
+}
+
+export const runVisualAudit: AuditService = async (input) => {
   const startedAt = Date.now();
   const log = (message: string, details?: Record<string, unknown>) => {
     console.info(
@@ -39,13 +40,6 @@ export const runVisualAudit: AuditService = async (input, config) => {
       controller.signal,
       log,
     );
-    const visualAudit = await analyzeScreenshots(
-      captures,
-      config.openAiApiKey,
-      config.openAiModel,
-      controller.signal,
-      log,
-    );
 
     const finalUrl =
       captures.desktop.finalUrl ?? captures.mobile.finalUrl ?? validatedUrl.toString();
@@ -55,14 +49,30 @@ export const runVisualAudit: AuditService = async (input, config) => {
       ...(input.leadId ? { leadId: input.leadId } : {}),
       url: validatedUrl.toString(),
       finalUrl,
-      visualAudit: {
-        ...visualAudit,
-        desktopAuditAvailable: Boolean(captures.desktop.image),
-        mobileAuditAvailable: Boolean(captures.mobile.image),
+      screenshots: {
+        desktop: captures.desktop.image
+          ? {
+              available: true,
+              mimeType: "image/jpeg",
+              width: 1_440,
+              height: 1_600,
+              sizeBytes: captures.desktop.image.byteLength,
+              dataUrl: screenshotDataUrl(captures.desktop.image),
+            }
+          : { available: false },
+        mobile: captures.mobile.image
+          ? {
+              available: true,
+              mimeType: "image/jpeg",
+              width: 390,
+              height: 1_800,
+              sizeBytes: captures.mobile.image.byteLength,
+              dataUrl: screenshotDataUrl(captures.mobile.image),
+            }
+          : { available: false },
       },
       ...(screenshotIssues.length > 0 ? { screenshotIssues } : {}),
-      modelUsed: config.openAiModel,
-      auditedAt: new Date().toISOString(),
+      capturedAt: new Date().toISOString(),
     };
     log("audit elkészült");
     return result;

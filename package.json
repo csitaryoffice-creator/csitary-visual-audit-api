@@ -2,7 +2,7 @@
   "name": "csitary-visual-audit-api",
   "version": "1.0.0",
   "private": true,
-  "description": "Docker-alapú vizuális weboldal-audit API Playwright és OpenAI használatával.",
+  "description": "Docker-alapú asztali és mobil weboldal-screenshot API Playwright használatával.",
   "type": "module",
   "main": "dist/server.js",
   "engines": {
@@ -20,9 +20,7 @@
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
     "ipaddr.js": "^2.2.0",
-    "openai": "^6.16.0",
     "playwright": "1.55.1",
-    "sharp": "^0.35.3",
     "zod": "3.25.76"
   },
   "devDependencies": {

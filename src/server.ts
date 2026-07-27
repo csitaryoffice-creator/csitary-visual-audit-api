@@ -17,13 +17,19 @@ process.on("uncaughtException", (error) => {
 
 try {
   const config = loadConfig();
-  const server = createApp(config).listen(config.port, "0.0.0.0", () => {
-    console.log(`Csitáry Visual Audit API elindult a(z) ${config.port} porton.`);
+  const port = Number(process.env.PORT) || 10_000;
+  const app = createApp(config);
+  const server = app.listen(port, "0.0.0.0", () => {
+    console.log(`Szerver elindult a ${port} porton`);
   });
   server.requestTimeout = 190_000;
   server.headersTimeout = 195_000;
   server.keepAliveTimeout = 185_000;
-} catch {
-  console.error("A szolgáltatás konfigurációja hiányos vagy érvénytelen.");
+} catch (error) {
+  console.error(
+    error instanceof Error
+      ? error.message
+      : "A szolgáltatás indítása ismeretlen hiba miatt sikertelen.",
+  );
   process.exit(1);
 }
